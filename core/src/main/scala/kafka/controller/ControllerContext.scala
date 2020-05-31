@@ -22,6 +22,7 @@ import org.apache.kafka.common.TopicPartition
 
 import scala.collection.{Seq, Set, mutable}
 
+// 定义了所有元数据信息，保存Controller的元数据的容器， 承载了ZK上的所有元数据，broker是不会直接与zk交互获取元数据的。都是通过controller来进行通信
 class ControllerContext {
   val stats = new ControllerStats //controller统计信息类
 
@@ -39,6 +40,7 @@ class ControllerContext {
   private var liveBrokersUnderlying: Set[Broker] = Set.empty
   private var liveBrokerIdsUnderlying: Set[Int] = Set.empty
 
+  //获取某主题分区副本列表的方法
   def partitionReplicaAssignment(topicPartition: TopicPartition): Seq[Int] = {
     partitionReplicaAssignmentUnderlying.getOrElse(topicPartition.topic, mutable.Map.empty)
       .getOrElse(topicPartition.partition, Seq.empty)
@@ -63,7 +65,7 @@ class ControllerContext {
     }.toMap
   }
 
-
+  //获取集群上所有主题分区对象的方法
   def allPartitions: Set[TopicPartition] = {
     partitionReplicaAssignmentUnderlying.flatMap {
       case (topic, topicReplicaAssignment) => topicReplicaAssignment.map {

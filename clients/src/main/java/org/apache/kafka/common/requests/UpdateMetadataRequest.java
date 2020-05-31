@@ -44,6 +44,7 @@ import static org.apache.kafka.common.protocol.types.Type.INT32;
 import static org.apache.kafka.common.protocol.types.Type.NULLABLE_STRING;
 import static org.apache.kafka.common.protocol.types.Type.STRING;
 
+//该请求会更新Broker上的元数据缓存
 public class UpdateMetadataRequest extends AbstractRequest {
 
     private static final String CONTROLLER_ID_KEY_NAME = "controller_id";

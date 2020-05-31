@@ -19,10 +19,12 @@ package kafka.controller
 
 import scala.collection.Seq
 
+//多个事件(ControllerEvent)可能归属于一类状态
+//每个事件对应的处理状态
 sealed abstract class ControllerState {
 
   def value: Byte
-
+  //构造Controllerz状态速率d的监控z指标名称的。
   def rateAndTimeMetricName: Option[String] =
     if (hasRateAndTimeMetric) Some(s"${toString}RateAndTimeMs") else None
 
@@ -49,7 +51,7 @@ object ControllerState {
     // for backwards compatibility. The alternative would be to have the same metric under two different names.
     override def rateAndTimeMetricName = Some("LeaderElectionRateAndTimeMs")
   }
-
+  //表示主题总数发生变化的状态
   case object TopicChange extends ControllerState {
     def value = 3
   }

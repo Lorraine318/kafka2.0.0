@@ -41,6 +41,8 @@ import scala.collection.mutable.HashMap
 import scala.collection.{Set, mutable}
 
 
+//controller向broker发送请求所用的通道管理器
+//管理Controller与集群Broker之间的连接，并为每个Broker创建RequestSendThread线程实例。
 object ControllerChannelManager {
   val QueueSizeMetricName = "QueueSize"
   val RequestRateAndQueueTimeMetricName = "RequestRateAndQueueTimeMs"
@@ -63,6 +65,7 @@ class ControllerChannelManager(controllerContext: ControllerContext, config: Kaf
   )
 
   controllerContext.liveBrokers.foreach(addNewBroker)
+
 
   def startup() = {
     brokerLock synchronized {
@@ -196,16 +199,18 @@ class ControllerChannelManager(controllerContext: ControllerContext, config: Kaf
       requestThread.start()
   }
 }
-
+//每个QueueItem保存的请求只能是：
+//1.stopReplicaRequest   2. UpdateMetadataRequest  3.LeaderAndsrRequest
 case class QueueItem(apiKey: ApiKeys, request: AbstractRequest.Builder[_ <: AbstractRequest],
                      callback: AbstractResponse => Unit, enqueueTimeMs: Long)
 
-class RequestSendThread(val controllerId: Int,
-                        val controllerContext: ControllerContext,
-                        val queue: BlockingQueue[QueueItem],
-                        val networkClient: NetworkClient,
-                        val brokerNode: Node,
-                        val config: KafkaConfig,
+//操作QueueItem
+class RequestSendThread(val controllerId: Int,    //controller所在broker的id
+                        val controllerContext: ControllerContext, //controller元数据信息
+                        val queue: BlockingQueue[QueueItem],  //请求阻塞队列
+                        val networkClient: NetworkClient, //用于执行发送的网络IO类
+                        val brokerNode: Node, //目标broker节点
+                        val config: KafkaConfig,//kafka配置信息
                         val time: Time,
                         val requestRateAndQueueTimeMetrics: Timer,
                         val stateChangeLogger: StateChangeLogger,
@@ -219,16 +224,16 @@ class RequestSendThread(val controllerId: Int,
   override def doWork(): Unit = {
 
     def backoff(): Unit = pause(100, TimeUnit.MILLISECONDS)
-
+    //移除并返回头元素，阻塞
     val QueueItem(apiKey, requestBuilder, callback, enqueueTimeMs) = queue.take()
+    //更新监控指标
     requestRateAndQueueTimeMetrics.update(time.milliseconds() - enqueueTimeMs, TimeUnit.MILLISECONDS)
 
     var clientResponse: ClientResponse = null
     try {
       var isSendSuccessful = false
       while (isRunning && !isSendSuccessful) {
-        // if a broker goes down for a long time, then at some point the controller's zookeeper listener will trigger a
-        // removeBroker which will invoke shutdown() on this thread. At that point, we will stop retrying.
+        //如果没有创建与目标Broker的TCP连接，或者连接暂时不可用
         try {
           if (!brokerReady()) {
             isSendSuccessful = false
@@ -237,6 +242,7 @@ class RequestSendThread(val controllerId: Int,
           else {
             val clientRequest = networkClient.newClientRequest(brokerNode.idString, requestBuilder,
               time.milliseconds(), true)
+            //发送请求，等待接收Response
             clientResponse = NetworkClientUtils.sendAndReceive(networkClient, clientRequest, time)
             isSendSuccessful = true
           }
@@ -249,9 +255,11 @@ class RequestSendThread(val controllerId: Int,
             backoff()
         }
       }
+      //如果接收到了response
       if (clientResponse != null) {
         val requestHeader = clientResponse.requestHeader
         val api = requestHeader.apiKey
+        // 此Response的请求类型必须是LeaderAndIsrRequest、StopReplicaRequest或UpdateMetadataRequest中的一种
         if (api != ApiKeys.LEADER_AND_ISR && api != ApiKeys.STOP_REPLICA && api != ApiKeys.UPDATE_METADATA)
           throw new KafkaException(s"Unexpected apiKey received: $apiKey")
 

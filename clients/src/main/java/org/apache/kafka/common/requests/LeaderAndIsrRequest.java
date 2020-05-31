@@ -40,6 +40,7 @@ import static org.apache.kafka.common.protocol.types.Type.BOOLEAN;
 import static org.apache.kafka.common.protocol.types.Type.INT32;
 import static org.apache.kafka.common.protocol.types.Type.STRING;
 
+//告知broker相关主题各个分区的leader副本位于那个broker，isr副本在那些broker
 public class LeaderAndIsrRequest extends AbstractRequest {
     private static final String CONTROLLER_ID_KEY_NAME = "controller_id";
     private static final String CONTROLLER_EPOCH_KEY_NAME = "controller_epoch";
