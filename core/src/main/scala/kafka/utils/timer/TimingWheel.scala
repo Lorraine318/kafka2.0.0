@@ -97,20 +97,30 @@ import java.util.concurrent.atomic.AtomicInteger
  * It is caller's responsibility to enforce it. Simultaneous add calls are thread-safe.
  */
 @nonthreadsafe
-private[timer] class TimingWheel(tickMs: Long, wheelSize: Int, startMs: Long, taskCounter: AtomicInteger, queue: DelayQueue[TimerTaskList]) {
+//时间轮   包含多个TimerTaskList
+private[timer] class TimingWheel(tickMs: Long, //滴答一次的时长 ，就是向前推进一格的时间，在Kafka中，第一层时间轮的ticMs被固定为1毫秒，也就是说向前推动一格bucket的时长就是1毫秒
+                                 wheelSize: Int, //每一层时间轮上的Bucket数量，第一层的bucket数量是20
+                                 startMs: Long, //时间轮对象被创建时的起始时间戳
+                                 taskCounter: AtomicInteger, //这一层时间轮上的总定时任务数
+                                 queue: DelayQueue[TimerTaskList] //将所有bucket按照该过期时间排序的延迟队列，随着时间推移，kafka依靠这个队列获取那些过期的bucket,并清除他们
+                                ) {
 
-  private[this] val interval = tickMs * wheelSize
-  private[this] val buckets = Array.tabulate[TimerTaskList](wheelSize) { _ => new TimerTaskList(taskCounter) }
+  private[this] val interval = tickMs * wheelSize  //这层时间轮总时长，滴答时长* 该层bucket数量，第一次也就是20毫秒，由于下一层的时间轮滴答时长就是上一层的总时长，第二层也就是抵达市场20毫秒，20层，400毫秒
+  private[this] val buckets = Array.tabulate[TimerTaskList](wheelSize) { _ => new TimerTaskList(taskCounter) } //时间轮下的所有bucket对象
 
-  private[this] var currentTime = startMs - (startMs % tickMs) // rounding down to multiple of tickMs
+  private[this] var currentTime = startMs - (startMs % tickMs) // 假设滴答时长20毫秒，当前时间戳123毫秒，那么currentTime就是123-123%20 =120
 
-  // overflowWheel can potentially be updated and read by two concurrent threads through add().
-  // Therefore, it needs to be volatile due to the issue of Double-Checked Locking pattern with JVM
+  //创建上层时间轮的， 当有新定时任务到达时，会尝试将其加入第一层时间轮，如果第一层的interval总时长无法容纳下该定时任务，就现场创建并配置好第二层时间轮，并尝试放入，如果依然无法容纳，继续创建
   @volatile private[this] var overflowWheel: TimingWheel = null
 
+  //创建上层时间轮
   private[this] def addOverflowWheel(): Unit = {
     synchronized {
+      //只有之前没有创建上层时间轮方法才会继续
       if (overflowWheel == null) {
+        //创建新的时间轮实例
+        //滴答时长tickMs等于下层时间轮总时长
+        //每层轮子都是相同的
         overflowWheel = new TimingWheel(
           tickMs = interval,
           wheelSize = wheelSize,
@@ -123,21 +133,27 @@ private[timer] class TimingWheel(tickMs: Long, wheelSize: Int, startMs: Long, ta
   }
 
   def add(timerTaskEntry: TimerTaskEntry): Boolean = {
+    //获取定时任务的过期时间戳
     val expiration = timerTaskEntry.expirationMs
-
+    //如果该任务已然被取消，则无需添加，直接返回
     if (timerTaskEntry.cancelled) {
       // Cancelled
       false
+      //如果该任务超时时间已过期
     } else if (expiration < currentTime + tickMs) {
       // Already expired
       false
+      //如果该任务超时时间在本层时间轮覆盖时间范围内
     } else if (expiration < currentTime + interval) {
       // Put in its own bucket
       val virtualId = expiration / tickMs
+      //计算要被放入到那个Bucket中
       val bucket = buckets((virtualId % wheelSize.toLong).toInt)
+      //添加到bucket中
       bucket.add(timerTaskEntry)
 
-      // Set the bucket expiration time
+     //设置bucket过期时间
+      //如果该时间变更过，说明bucket是新建或被重用，将其加回到DelayQueue中
       if (bucket.setExpiration(virtualId * tickMs)) {
         // The bucket needs to be enqueued because it was an expired bucket
         // We only need to enqueue the bucket when its expiration time has changed, i.e. the wheel has advanced
@@ -147,19 +163,23 @@ private[timer] class TimingWheel(tickMs: Long, wheelSize: Int, startMs: Long, ta
         queue.offer(bucket)
       }
       true
+      //本层时间轮无法容纳该任务，交由上层时间轮处理
     } else {
-      // Out of the interval. Put it into the parent timer
+      // 按需创建时间轮
       if (overflowWheel == null) addOverflowWheel()
+      //加入到上层时间轮中
       overflowWheel.add(timerTaskEntry)
     }
   }
 
   // Try to advance the clock
   def advanceClock(timeMs: Long): Unit = {
+    //向前驱动到的时点要超过bucket的时间范围，才是有意义的推进，否则什么也不做
+    //更新当前时间到下一个bucket的起始点
     if (timeMs >= currentTime + tickMs) {
       currentTime = timeMs - (timeMs % tickMs)
 
-      // Try to advance the clock of the overflow wheel if present
+      // 同时尝试为上一层时间轮做向前推进操作
       if (overflowWheel != null) overflowWheel.advanceClock(currentTime)
     }
   }

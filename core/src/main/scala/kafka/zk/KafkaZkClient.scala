@@ -50,6 +50,7 @@ import scala.collection.{Seq, mutable}
  * easier to quickly migrate away from `ZkUtils`. We should revisit this once the migration is completed and tests are
  * in place. We should also consider whether a monolithic [[kafka.zk.ZkData]] is the way to go.
  */
+//kafka 和zk jjiao交互的客户端对象
 class KafkaZkClient private (zooKeeperClient: ZooKeeperClient, isSecure: Boolean, time: Time) extends AutoCloseable with
   Logging with KafkaMetricsGroup {
 

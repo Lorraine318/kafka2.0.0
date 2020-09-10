@@ -196,21 +196,30 @@ private[group] class GroupMetadata(val groupId: String, initialState: GroupState
   def leaderOrNull: String = leaderId.orNull
   def protocolOrNull: String = protocol.orNull
 
+  //添加消费者成员
   def add(member: MemberMetadata) {
+    //如果要添加的是第一个消费者成员
     if (members.isEmpty)
+      //就把该成员的protolType设置成未消费者组的protolType
       this.protocolType = Some(member.protocolType)
-
+//确保成员元数据中的groupid和组ID相同
     assert(groupId == member.groupId)
+    ////确保成员元数据中的protoclType和组protocolType相同
     assert(this.protocolType.orNull == member.protocolType)
     assert(supportsProtocols(member.protocols))
 
+    //如果尚未选出leader成员
     if (leaderId.isEmpty)
+      //把该成员设为leader
       leaderId = Some(member.memberId)
+    //将成员添加进members
     members.put(member.memberId, member)
   }
 
   def remove(memberId: String) {
+    // 从members中移除给定成员
     members.remove(memberId)
+    // 更新已加入组的成员数
     if (isLeader(memberId)) {
       leaderId = if (members.isEmpty) {
         None
@@ -236,20 +245,20 @@ private[group] class GroupMetadata(val groupId: String, initialState: GroupState
   def generateMemberIdSuffix = UUID.randomUUID().toString
 
   def canRebalance = GroupMetadata.validPreviousStates(PreparingRebalance).contains(state)
-
+//设置/更新状态
   def transitionTo(groupState: GroupState) {
-    assertValidTransition(groupState)
-    state = groupState
+    assertValidTransition(groupState)  //确保是合法的状态转换
+    state = groupState //设置状态到给定状态
   }
-
+  //选出消费者组的分区消费策略
   def selectProtocol: String = {
     if (members.isEmpty)
       throw new IllegalStateException("Cannot select protocol for empty group")
 
-    // select the protocol for this group which is supported by all members
+    // 获取所有成员都支持的策略集合
     val candidates = candidateProtocols
 
-    // let each member vote for one of the protocols and choose the one with the most votes
+    // 让每个成员投票，票数最多的那个策略当选
     val votes: List[(String, Int)] = allMemberMetadata
       .map(_.vote(candidates))
       .groupBy(identity)

@@ -129,12 +129,13 @@ class ReplicaManager(val config: KafkaConfig,
                      time: Time,
                      val zkClient: KafkaZkClient,
                      scheduler: Scheduler,
-                     val logManager: LogManager,
+                     val logManager: LogManager, //日志管理器，负责创建h和管理分区的日志对象。
                      val isShuttingDown: AtomicBoolean,
                      quotaManagers: QuotaManagers,
                      val brokerTopicStats: BrokerTopicStats,
-                     val metadataCache: MetadataCache,
-                     logDirFailureChannel: LogDirFailureChannel,
+                     val metadataCache: MetadataCache,  //block端的y元数据缓存，保存集群上分区的Leader，ISR等信息，每台Broker上的元数据缓存，都是从Controller端的元数据缓存异步同步过来的。
+                     logDirFailureChannel: LogDirFailureChannel, //失效日志路径的处理器类
+                    //处理延时Prouce请求的Purgatory
                      val delayedProducePurgatory: DelayedOperationPurgatory[DelayedProduce],
                      val delayedFetchPurgatory: DelayedOperationPurgatory[DelayedFetch],
                      val delayedDeleteRecordsPurgatory: DelayedOperationPurgatory[DelayedDeleteRecords],

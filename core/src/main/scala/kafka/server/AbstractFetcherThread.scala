@@ -45,11 +45,12 @@ import scala.math._
 /**
  *  Abstract class for fetching data from multiple partitions from the same broker.
  */
-abstract class AbstractFetcherThread(name: String,
-                                     clientId: String,
-                                     val sourceBroker: BrokerEndPoint,
-                                     fetchBackOffMs: Int = 0,
-                                     isInterruptible: Boolean = true,
+//功能是从Broker获取多个分区的消息数据，至于h获取之后如何对数据进行处理，则交给子类来完成。
+abstract class AbstractFetcherThread(name: String,  //线程名称
+                                     clientId: String,  //clientid,用于日志输出
+                                     val sourceBroker: BrokerEndPoint, //数据源Broker地址    决定了leader副本所在的Broker是那一台，因为该字段表示follower副本从那个broker拉取数据
+                                     fetchBackOffMs: Int = 0, //获取操作重试间隔
+                                     isInterruptible: Boolean = true, //线程是否允许被中断
                                      includeLogTruncation: Boolean)
   extends ShutdownableThread(name, isInterruptible) {
 
@@ -514,11 +515,13 @@ case class PartitionFetchState(fetchOffset: Long, delay: DelayedItem, truncating
   def this(offset: Long, delay: DelayedItem) = this(offset, delay, false)
 
   def this(fetchOffset: Long) = this(fetchOffset, new DelayedItem(0))
-
+    //日志获取
+    // 分区可获取的条件是副本处于Fetching且未被推迟执行
   def isReadyForFetch: Boolean = delay.getDelay(TimeUnit.MILLISECONDS) == 0 && !truncatingLog
-
+  //日志截断
+  // 分区处于截断中状态的条件，副本处于Truncating状态且未被推迟执行
   def isTruncatingLog: Boolean = delay.getDelay(TimeUnit.MILLISECONDS) == 0 && truncatingLog
-
+  //分区被推迟获取数据的条件，存在未过期的延迟任务
   def isDelayed: Boolean = delay.getDelay(TimeUnit.MILLISECONDS) > 0
 
   override def toString = "offset:%d-isReadyForFetch:%b-isTruncatingLog:%b".format(fetchOffset, isReadyForFetch, truncatingLog)

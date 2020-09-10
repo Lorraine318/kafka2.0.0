@@ -41,6 +41,7 @@ import scala.collection.mutable
  * 4. OfflinePartition    : If, after successful leader election, the leader for partition dies, then the partition
  *                          moves to the OfflinePartition state. Valid previous states are NewPartition/OnlinePartition
  */
+// 状态机： 负责定义Kafka分区状态，合法的状态转换，以及管理状态之间的转换。 每个broker启动时，都会创建相应的分区状态机实例，但是只有controller所在的broker才会启动它们。
 class PartitionStateMachine(config: KafkaConfig,
                             stateChangeLogger: StateChangeLogger,
                             controllerContext: ControllerContext,
@@ -107,13 +108,17 @@ class PartitionStateMachine(config: KafkaConfig,
     // TODO: If handleStateChanges catches an exception, it is not enough to bail out and log an error.
     // It is important to trigger leader election for those partitions.
   }
-
-  def handleStateChanges(partitions: Seq[TopicPartition], targetState: PartitionState,
+  //处理分区状态转换的方法   把partitions的状态设置为targetState,同时还可能需要用leaderElectionStrategy策略为partitions选举新的leader
+  def handleStateChanges(partitions: Seq[TopicPartition],  //待执行状态变更的目标分区列表
+                         targetState: PartitionState, //目标状态
                          partitionLeaderElectionStrategyOpt: Option[PartitionLeaderElectionStrategy] = None): Unit = {
     if (partitions.nonEmpty) {
       try {
+        //清空controller待发送请求集合，准备本次请求发送
         controllerBrokerRequestBatch.newBatch()
+        //调用doHandleStateChanges方法执行真正的状态变更逻辑
         doHandleStateChanges(partitions, targetState, partitionLeaderElectionStrategyOpt)
+        //controller给相关broker发送请求通知状态变化
         controllerBrokerRequestBatch.sendRequestsToBrokers(controllerContext.epoch)
       } catch {
         case e: Throwable => error(s"Error while moving some partitions to $targetState state", e)
@@ -147,13 +152,17 @@ class PartitionStateMachine(config: KafkaConfig,
    * @param partitions  The partitions for which the state transition is invoked
    * @param targetState The end state that the partition should be moved to
    */
+    //真正分区状态转换逻辑
   private def doHandleStateChanges(partitions: Seq[TopicPartition], targetState: PartitionState,
                            partitionLeaderElectionStrategyOpt: Option[PartitionLeaderElectionStrategy]): Unit = {
     val stateChangeLog = stateChangeLogger.withControllerEpoch(controllerContext.epoch)
+      //初始化新分区的状态为NotExistentPartition
     partitions.foreach(partition => partitionState.getOrElseUpdate(partition, NonExistentPartition))
+      //找出要执行非法状态转化的分区，记录错误日志
     val (validPartitions, invalidPartitions) = partitions.partition(partition => isValidTransition(partition, targetState))
     invalidPartitions.foreach(partition => logInvalidTransition(partition, targetState))
-    targetState match {
+    //根据 targetState 进入到不同的case分支
+      targetState match {
       case NewPartition =>
         validPartitions.foreach { partition =>
           stateChangeLog.trace(s"Changed partition $partition state from ${partitionState(partition)} to $targetState with " +
@@ -433,60 +442,80 @@ class PartitionStateMachine(config: KafkaConfig,
         s"from $currState to $targetState", t)
   }
 }
-
+//值得一提的是，社区于 2.4.0.0 版本正式支持在 AdminClient 端为给定分区选举 Leader。目前的设计是，如果 Leader 选举是由 AdminClient 端触发的，那就默认开启 Unclean Leader 选举
 object PartitionLeaderElectionAlgorithms {
-  def offlinePartitionLeaderElection(assignment: Seq[Int], isr: Seq[Int], liveReplicas: Set[Int], uncleanLeaderElectionEnabled: Boolean, controllerContext: ControllerContext): Option[Int] = {
+
+  //针对leader副本下线而引发的分区leader选举的方法操作
+  def offlinePartitionLeaderElection(assignment: Seq[Int],  //分区的副本列表   AR，有序
+                                     isr: Seq[Int],   //与分区保持一定同步的副本列表，包含leader 有序
+                                     liveReplicas: Set[Int], //该分区所有处于存活状态的副本
+                                     uncleanLeaderElectionEnabled: Boolean, //默认false,不允许unclean leader选举
+                                     controllerContext: ControllerContext): Option[Int] = {
+    //从当前分区副本列表种寻找首个处于存活状态的ISR副本
     assignment.find(id => liveReplicas.contains(id) && isr.contains(id)).orElse {
+      //如果找不到满足条件的副本，查看是否允许Unclean Leader选举，（unclean.leader.election.enable是否等于true）
       if (uncleanLeaderElectionEnabled) {
+        //选择当前副本列表种的第一个存活副本作为leader
         val leaderOpt = assignment.find(liveReplicas.contains)
         if (!leaderOpt.isEmpty)
           controllerContext.stats.uncleanLeaderElectionRate.mark()
         leaderOpt
       } else {
-        None
+        None  //如果不允许Unclean leader选举，则返回None表示无法选举leader
       }
     }
   }
-
+  // 因为执行分区副本重分配操作而引发的分区leader选举的方法操作
   def reassignPartitionLeaderElection(reassignment: Seq[Int], isr: Seq[Int], liveReplicas: Set[Int]): Option[Int] = {
+    //从给定的副本列表中找到存活的副本列表
     reassignment.find(id => liveReplicas.contains(id) && isr.contains(id))
   }
-
+  //因为执行Preferred副本Leader选举而引发的分区leader选举的方法操作
   def preferredReplicaPartitionLeaderElection(assignment: Seq[Int], isr: Seq[Int], liveReplicas: Set[Int]): Option[Int] = {
+    //从AR副本列表中找到存活的副本列表
     assignment.headOption.filter(id => liveReplicas.contains(id) && isr.contains(id))
   }
-
+  //因为正常关闭Broker而引发的分区leader选举的方法操作
   def controlledShutdownPartitionLeaderElection(assignment: Seq[Int], isr: Seq[Int], liveReplicas: Set[Int], shuttingDownBrokers: Set[Int]): Option[Int] = {
+    //从AR副本列表中找到存活的副本列表
     assignment.find(id => liveReplicas.contains(id) && isr.contains(id) && !shuttingDownBrokers.contains(id))
   }
 }
-
+//分区leader选举策略接口
 sealed trait PartitionLeaderElectionStrategy
+//离线分区leader选举策略   因为leader副本下线而引发的分区leader选举
 case object OfflinePartitionLeaderElectionStrategy extends PartitionLeaderElectionStrategy
+//分区副本重分配Leader选举策略   因为执行分区副本重分配操作而引发的分区leader选举
 case object ReassignPartitionLeaderElectionStrategy extends PartitionLeaderElectionStrategy
+//分区Preferred副本Leader选举策略  因为执行Preferred副本Leader选举而引发的分区leader选举
 case object PreferredReplicaPartitionLeaderElectionStrategy extends PartitionLeaderElectionStrategy
+//broker Controller关闭时Leader选举策略   因为正常关闭Broker而引发的分区leader选举
 case object ControlledShutdownPartitionLeaderElectionStrategy extends PartitionLeaderElectionStrategy
 
+
+//分区状态机涉及到的4种分区状态
 sealed trait PartitionState {
   def state: Byte
   def validPreviousStates: Set[PartitionState]
 }
 
+//分区被创建后设置的状态
 case object NewPartition extends PartitionState {
   val state: Byte = 0
   val validPreviousStates: Set[PartitionState] = Set(NonExistentPartition)
 }
-
+//分区正式提供服务时所处的状态
 case object OnlinePartition extends PartitionState {
   val state: Byte = 1
+  //合法状态转换包括：其他三种
   val validPreviousStates: Set[PartitionState] = Set(NewPartition, OnlinePartition, OfflinePartition)
 }
-
+//分区下线后所处的状态
 case object OfflinePartition extends PartitionState {
   val state: Byte = 2
   val validPreviousStates: Set[PartitionState] = Set(NewPartition, OnlinePartition, OfflinePartition)
 }
-
+//分区被删除，并且从分区分区状态机移除的状态
 case object NonExistentPartition extends PartitionState {
   val state: Byte = 3
   val validPreviousStates: Set[PartitionState] = Set(OfflinePartition)

@@ -47,7 +47,7 @@ object ControllerChannelManager {
   val QueueSizeMetricName = "QueueSize"
   val RequestRateAndQueueTimeMetricName = "RequestRateAndQueueTimeMs"
 }
-
+//controller向broker发送请求所用的通道管理器
 class ControllerChannelManager(controllerContext: ControllerContext, config: KafkaConfig, time: Time, metrics: Metrics,
                                stateChangeLogger: StateChangeLogger, threadNamePrefix: Option[String] = None) extends Logging with KafkaMetricsGroup {
   import ControllerChannelManager._

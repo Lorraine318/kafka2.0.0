@@ -309,6 +309,7 @@ class KafkaController(val config: KafkaConfig, //kafkap配置文件
    * This callback is invoked by the zookeeper leader elector when the current broker resigns as the controller. This is
    * required to clean up internal controller data structures
    */
+    //卸任逻辑
   private def onControllerResignation() {
     debug("Resigning")
     // 取消zk监听器的注册
